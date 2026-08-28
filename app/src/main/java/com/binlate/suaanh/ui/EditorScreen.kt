@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,7 +55,19 @@ fun EditorScreen(state: EditorViewModel) {
     val scope = rememberCoroutineScope()
 
     var colorPicker by remember { mutableStateOf<ColorPickerRequest?>(null) }
-    var textOpen by remember { mutableStateOf(false) }
+    var addTextOpen by remember { mutableStateOf(false) }
+    var editTextOpen by remember { mutableStateOf(false) }
+    var editTargetId by remember { mutableStateOf<Long?>(null) }
+
+    // When the view model requests editing an existing text layer, open the editor.
+    LaunchedEffect(state.editRequestId) {
+        val id = state.editRequestId
+        if (id != null) {
+            editTargetId = id
+            editTextOpen = true
+            state.clearEditRequest()
+        }
+    }
 
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -108,7 +121,7 @@ fun EditorScreen(state: EditorViewModel) {
             ToolControls(
                 state = state,
                 openColorPicker = { request -> colorPicker = request },
-                onAddText = { textOpen = true },
+                onAddText = { addTextOpen = true },
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -132,10 +145,27 @@ fun EditorScreen(state: EditorViewModel) {
         ColorPickerDialog(request = request, onDismiss = { colorPicker = null })
     }
 
-    if (textOpen) {
+    if (addTextOpen) {
         TextContentDialog(
-            onConfirm = { content -> state.addText(content); textOpen = false },
-            onDismiss = { textOpen = false },
+            title = "Thêm chữ",
+            onConfirm = { content ->
+                addTextOpen = false
+                state.addText(content)
+            },
+            onDismiss = { addTextOpen = false },
+        )
+    }
+
+    if (editTextOpen) {
+        val target = state.findText(editTargetId ?: -1)
+        TextContentDialog(
+            title = "Sửa chữ",
+            initialText = target?.content.orEmpty(),
+            onConfirm = { content ->
+                editTextOpen = false
+                editTargetId?.let { id -> state.applyTextEdit(id, content) }
+            },
+            onDismiss = { editTextOpen = false },
         )
     }
 }

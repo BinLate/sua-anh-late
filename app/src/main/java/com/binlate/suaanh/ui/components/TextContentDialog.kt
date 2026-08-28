@@ -1,7 +1,6 @@
 package com.binlate.suaanh.ui.components
 
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -15,18 +14,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 /**
- * Simple dialog collecting the text the user wants to paste onto the image.
+ * Dialog for adding or editing a text layer. Pass the existing content when
+ * editing so the user can change text without creating a new layer.
  */
 @Composable
 fun TextContentDialog(
+    title: String = "Thêm chữ",
+    initialText: String = "",
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var text by remember { mutableStateOf("") }
+    var text by remember(initialText) { mutableStateOf(initialText) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Thêm chữ") },
+        title = { Text(title) },
         text = {
             OutlinedTextField(
                 value = text,

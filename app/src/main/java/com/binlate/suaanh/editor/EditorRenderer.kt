@@ -61,7 +61,7 @@ object EditorRenderer {
             color = layer.color
             textAlign = Paint.Align.CENTER
             textSize = layer.sizeFraction * w
-            typeface = Typeface.DEFAULT_BOLD
+            typeface = if (layer.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         }
         val x = layer.position.x * w
         val y = layer.position.y * h

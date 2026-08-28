@@ -76,9 +76,25 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private var draftPoints = mutableListOf<Offset>()
     private var coverStart: Offset? = null
     private var coverEnd: Offset? = null
-    private var draggingTextIndex = -1
-    private var movingText: Layer.Text? = null
+    private var movingTextId: Long? = null
+    private var movingOriginalPos: Offset = Offset.Zero
     private var dragStartOffset: Offset = Offset.Zero
+
+    // ---------- text selection / editing ----------
+    var selectedTextId by mutableStateOf<Long?>(null)
+        private set
+    var editRequestId by mutableStateOf<Long?>(null)
+        private set
+    private var nextTextId = 1L
+    private var textSessionBase: List<Layer>? = null
+    private var textSessionOn = false
+
+    /** The currently selected text layer, or null when none. */
+    val selectedText: Layer.Text?
+        get() = layers.lastOrNull { it is Layer.Text && it.id == selectedTextId } as Layer.Text?
+
+    fun findText(id: Long): Layer.Text? =
+        layers.lastOrNull { it is Layer.Text && it.id == id } as Layer.Text?
 
     // ---------------- Image load ----------------
     fun setImage(uri: Uri) {
@@ -103,6 +119,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         future.clear()
         canUndo = false
         canRedo = false
+        selectedTextId = null
+        editRequestId = null
+        movingTextId = null
+        textSessionBase = null
+        textSessionOn = false
+        nextTextId = 1L
         preview?.recycle()
         preview = null
         blurBitmap?.recycle()
@@ -229,49 +251,132 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // ---------------- text ----------------
+    /** Add a brand-new text layer and auto-select it. */
     fun addText(content: String) {
         if (content.isBlank()) return
         beginAction()
+        val id = nextTextId++
         finalize(
-            layers + Layer.Text(Offset(0.5f, 0.5f), content, textColor.toArgb(), textSizeFraction)
+            layers + Layer.Text(
+                id = id,
+                position = Offset(0.5f, 0.5f),
+                content = content,
+                color = textColor.toArgb(),
+                sizeFraction = textSizeFraction,
+            )
         )
+        selectedTextId = id
     }
 
-    /** Returns true when a text layer was grabbed for dragging. */
-    fun beginTextDrag(norm: Offset): Boolean {
-        val hit = layers.indexOfLast {
-            it is Layer.Text && distance(it as Layer.Text, norm) < 0.06f
+    /** Handle a tap on the canvas: select a text layer or open the editor for the selected one. */
+    fun handleTextTap(tapped: Layer.Text?) {
+        when {
+            tapped == null -> selectedTextId = null
+            tapped.id == selectedTextId -> editRequestId = tapped.id
+            else -> selectedTextId = tapped.id
         }
-        if (hit < 0) return false
+    }
+
+    /** Begin a drag on a (possibly null) text layer. Returns true when dragging a text. */
+    fun beginTextDrag(textOrNull: Layer.Text?, norm: Offset): Boolean {
+        if (textOrNull == null) {
+            selectedTextId = null
+            return false
+        }
         beginAction()
-        draggingTextIndex = hit
-        movingText = layers[hit] as Layer.Text
+        selectedTextId = textOrNull.id
+        movingTextId = textOrNull.id
+        movingOriginalPos = textOrNull.position
         dragStartOffset = norm
         return true
     }
 
     fun continueTextDrag(norm: Offset) {
-        val idx = draggingTextIndex
-        val text = movingText ?: return
-        if (idx < 0) return
+        val id = movingTextId ?: return
         val dx = norm.x - dragStartOffset.x
         val dy = norm.y - dragStartOffset.y
-        val updated = layers.toMutableList().apply {
-            this[idx] = text.copy(position = Offset(text.position.x + dx, text.position.y + dy))
+        layers = layers.map {
+            if (it is Layer.Text && it.id == id) {
+                it.copy(position = Offset(movingOriginalPos.x + dx, movingOriginalPos.y + dy))
+            } else {
+                it
+            }
         }
-        layers = updated
     }
 
     fun endTextDrag() {
-        if (draggingTextIndex >= 0) finalize(layers)
-        draggingTextIndex = -1
-        movingText = null
+        if (movingTextId != null) finalize(layers)
+        movingTextId = null
     }
 
-    private fun distance(text: Layer.Text, norm: Offset): Float {
-        val dx = text.position.x - norm.x
-        val dy = text.position.y - norm.y
-        return kotlin.math.sqrt(dx * dx + dy * dy)
+    fun requestEditSelected() {
+        editRequestId = selectedTextId
+    }
+
+    fun clearEditRequest() {
+        editRequestId = null
+    }
+
+    /** Edit the content of an existing text layer (no new layer is created). */
+    fun applyTextEdit(id: Long, content: String) {
+        val text = findText(id) ?: return
+        if (content == text.content) return
+        beginAction()
+        finalize(
+            layers.map {
+                if (it is Layer.Text && it.id == id) it.copy(content = content) else it
+            }
+        )
+        selectedTextId = id
+    }
+
+    // ---- property editing of the selected text (size / color), with undo session ----
+
+    /** Open an undo session so a sequence of live edits commits as one history entry. */
+    fun beginTextPropertySession() {
+        if (selectedTextId != null && !textSessionOn) {
+            textSessionBase = layers
+            textSessionOn = true
+            future.clear()
+        }
+    }
+
+    /** Live-preview font size; when a text is selected it updates that layer immediately. */
+    fun previewTextSize(fraction: Float) {
+        beginTextPropertySession()
+        textSizeFraction = fraction
+        val id = selectedTextId ?: return
+        layers = layers.map {
+            if (it is Layer.Text && it.id == id) it.copy(sizeFraction = fraction) else it
+        }
+    }
+
+    /** Live-preview color; when a text is selected it updates that layer immediately. */
+    fun previewTextColor(color: Color) {
+        beginTextPropertySession()
+        textColor = color
+        val id = selectedTextId ?: return
+        layers = layers.map {
+            if (it is Layer.Text && it.id == id) it.copy(color = color.toArgb()) else it
+        }
+    }
+
+    /** Commit the open text property session as a single undo step. */
+    fun commitTextPropertySession() {
+        if (!textSessionOn) return
+        textSessionOn = false
+        val base = textSessionBase
+        textSessionBase = null
+        if (base != null && base != layers) history.add(base)
+        updateUndoFlags()
+    }
+
+    /** Discard the open session and restore the state before it (used by Cancel). */
+    fun cancelTextPropertySession() {
+        if (!textSessionOn) return
+        textSessionOn = false
+        layers = textSessionBase ?: layers
+        textSessionBase = null
     }
 
     // ---------------- export ----------------

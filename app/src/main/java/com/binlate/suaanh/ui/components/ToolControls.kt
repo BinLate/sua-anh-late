@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +35,8 @@ import kotlin.math.roundToInt
 
 /**
  * Per-tool control row: colour palette + size slider (and cover mode selector).
+ * When a text layer is selected, the controls edit that layer instead of just
+ * configuring the "next add" defaults.
  */
 @Composable
 fun ToolControls(
@@ -45,7 +48,9 @@ fun ToolControls(
     when (state.tool) {
         EditorTool.PEN -> {
             ColorControls(state.penColor, { state.penColor = it }, {
-                openColorPicker(ColorPickerRequest(state.penColor) { state.penColor = it })
+                openColorPicker(
+                    ColorPickerRequest(state.penColor, onApply = { state.penColor = it })
+                )
             }, modifier)
             SizeControl("Kích thước bút", state.penWidthFraction, 0.0001f..0.008f) {
                 state.penWidthFraction = it
@@ -54,7 +59,9 @@ fun ToolControls(
 
         EditorTool.HIGHLIGHT -> {
             ColorControls(state.highlightColor, { state.highlightColor = it }, {
-                openColorPicker(ColorPickerRequest(state.highlightColor) { state.highlightColor = it })
+                openColorPicker(
+                    ColorPickerRequest(state.highlightColor, onApply = { state.highlightColor = it })
+                )
             }, modifier)
             SizeControl("Ngòi highlight", state.highlightWidthFraction, 0.004f..0.05f) {
                 state.highlightWidthFraction = it
@@ -62,17 +69,47 @@ fun ToolControls(
         }
 
         EditorTool.TEXT -> {
-            ColorControls(state.textColor, { state.textColor = it }, {
-                openColorPicker(ColorPickerRequest(state.textColor) { state.textColor = it })
+            val sel = state.selectedText
+            val curColor = sel?.let { Color(it.color) } ?: state.textColor
+            val curSize = sel?.sizeFraction ?: state.textSizeFraction
+
+            ColorControls(curColor, { color ->
+                state.previewTextColor(color)
+                state.commitTextPropertySession()
+            }, {
+                openColorPicker(
+                    ColorPickerRequest(
+                        initial = curColor,
+                        onLive = { state.previewTextColor(it) },
+                        onApply = {
+                            state.previewTextColor(it)
+                            state.commitTextPropertySession()
+                        },
+                        onCancel = { state.cancelTextPropertySession() },
+                    )
+                )
             }, modifier)
-            SizeControl("Kích thước chữ", state.textSizeFraction, 0.02f..0.25f) {
-                state.textSizeFraction = it
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+
+            SizeControl(
+                "Kích thước chữ",
+                curSize,
+                0.02f..0.3f,
+                onChange = { state.previewTextSize(it) },
+                onValueChangeFinished = { state.commitTextPropertySession() },
+            )
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = onAddText) {
                     Icon(Icons.Filled.Add, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Thêm chữ")
+                }
+                if (sel != null) {
+                    TextButton(onClick = { state.requestEditSelected() }) {
+                        Icon(Icons.Filled.Edit, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Sửa chữ")
+                    }
                 }
             }
         }
@@ -83,7 +120,7 @@ fun ToolControls(
                 ColorControls(
                     state.coverColor,
                     { state.coverColor = it },
-                    { openColorPicker(ColorPickerRequest(state.coverColor) { state.coverColor = it }) },
+                    { openColorPicker(ColorPickerRequest(state.coverColor, onApply = { state.coverColor = it })) },
                     modifier,
                 )
             }
@@ -151,6 +188,7 @@ private fun SizeControl(
     label: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
+    onValueChangeFinished: () -> Unit = {},
     onChange: (Float) -> Unit,
 ) {
     val percent = ((value - range.start) / (range.endInclusive - range.start) * 100)
@@ -161,6 +199,11 @@ private fun SizeControl(
             style = MaterialTheme.typography.labelMedium,
             textAlign = TextAlign.Start,
         )
-        Slider(value = value, onValueChange = onChange, valueRange = range)
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            onValueChangeFinished = onValueChangeFinished,
+            valueRange = range,
+        )
     }
 }

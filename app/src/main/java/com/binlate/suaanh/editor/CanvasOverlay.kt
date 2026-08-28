@@ -3,23 +3,31 @@ package com.binlate.suaanh.editor
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
@@ -30,9 +38,12 @@ import com.binlate.suaanh.editor.model.Layer
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+private val SelectionColor = Color(0xFF2196F3)
+
 /**
  * The editable canvas: draws the fitted image, applies the committed + draft
- * layers and turns touch gestures into editor actions (strokes, covers, text drag).
+ * layers and handles gestures. In the TEXT tool, taps select/open text editing
+ * and drags move a hit-tested text layer; other tools draw strokes / covers.
  */
 @Composable
 fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
@@ -40,7 +51,6 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
     val imageBitmap = remember(preview) { preview.asImageBitmap() }
     val blurImage = remember(vm.blurBitmap) { vm.blurBitmap?.asImageBitmap() }
     val pixelImage = remember(vm.pixelBitmap) { vm.pixelBitmap?.asImageBitmap() }
-    val density = LocalDensity.current
     val textMeasurer = rememberTextMeasurer()
 
     var fitRect by remember { mutableStateOf<Rect?>(null) }
@@ -54,9 +64,30 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
         }
     }
 
+    // Hit-test the topmost text layer that contains a screen point.
+    val hitText: (Offset) -> Layer.Text? = { pos ->
+        val r = fitRect
+        if (r == null) {
+            null
+        } else {
+            vm.layers.asReversed().firstNotNullOfOrNull { layer ->
+                if (layer is Layer.Text && textBounds(textMeasurer, layer, r).contains(pos)) {
+                    layer
+                } else {
+                    null
+                }
+            }
+        }
+    }
+
     Canvas(
         modifier = modifier
             .background(Color(0xFF1B1B1B))
+            .pointerInput(preview) {
+                detectTapGestures(
+                    onTap = { pos -> vm.handleTextTap(hitText(pos)) },
+                )
+            }
             .pointerInput(preview) {
                 detectDragGestures(
                     onDragStart = { position ->
@@ -64,7 +95,7 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
                         when (vm.tool) {
                             EditorTool.PEN, EditorTool.HIGHLIGHT -> vm.beginStroke(norm)
                             EditorTool.COVER -> vm.beginCover(norm)
-                            EditorTool.TEXT -> vm.beginTextDrag(norm)
+                            EditorTool.TEXT -> vm.beginTextDrag(hitText(position), norm)
                         }
                     },
                     onDrag = { change, _ ->
@@ -102,7 +133,8 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
         val sourceW = imageBitmap.width.toFloat()
         val sourceH = imageBitmap.height.toFloat()
         vm.layers.forEach { layer ->
-            drawLayer(layer, rect, sourceW, sourceH, blurImage, pixelImage, textMeasurer)
+            val isSelected = layer is Layer.Text && layer.id == vm.selectedTextId
+            drawLayer(layer, rect, sourceW, sourceH, blurImage, pixelImage, textMeasurer, isSelected)
         }
     }
 }
@@ -115,6 +147,33 @@ private fun endAction(vm: EditorViewModel) {
     }
 }
 
+/** Returns the on-screen bounds of a text layer (used for hit-test and selection box). */
+private fun textBounds(textMeasurer: TextMeasurer, layer: Layer.Text, rect: Rect): Rect {
+    val layout = measureTextLayout(textMeasurer, layer, rect)
+    val cx = rect.left + layer.position.x * rect.width
+    val cy = rect.top + layer.position.y * rect.height
+    val pad = 4f
+    return Rect(
+        cx - layout.size.width / 2f - pad,
+        cy - layout.size.height / 2f - pad,
+        cx + layout.size.width / 2f + pad,
+        cy + layout.size.height / 2f + pad,
+    )
+}
+
+private fun measureTextLayout(
+    textMeasurer: TextMeasurer,
+    layer: Layer.Text,
+    rect: Rect,
+) = textMeasurer.measure(
+    AnnotatedString(layer.content),
+    style = TextStyle(
+        color = Color(layer.color),
+        fontSize = TextUnit(layer.sizeFraction * rect.width, TextUnitType.Sp),
+        fontWeight = if (layer.bold) FontWeight.Bold else FontWeight.Normal,
+    ),
+)
+
 private fun DrawScope.drawLayer(
     layer: Layer,
     rect: Rect,
@@ -122,7 +181,8 @@ private fun DrawScope.drawLayer(
     sourceH: Float,
     blurImage: ImageBitmap?,
     pixelImage: ImageBitmap?,
-    textMeasurer: androidx.compose.ui.text.TextMeasurer,
+    textMeasurer: TextMeasurer,
+    isSelected: Boolean,
 ) {
     when (layer) {
         is Layer.Stroke -> {
@@ -136,30 +196,39 @@ private fun DrawScope.drawLayer(
             drawPath(
                 path = path,
                 color = Color(layer.color).copy(alpha = layer.alpha),
-                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                style = Stroke(
                     width = layer.widthFraction * min(rect.width, rect.height),
-                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                    join = androidx.compose.ui.graphics.StrokeJoin.Round,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
                 ),
             )
         }
 
         is Layer.Text -> {
-            val fontSize = TextUnit(layer.sizeFraction * rect.width, TextUnitType.Sp)
-            val layout = textMeasurer.measure(
-                androidx.compose.ui.text.AnnotatedString(layer.content),
-                style = androidx.compose.ui.text.TextStyle(
-                    color = Color(layer.color),
-                    fontSize = fontSize,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                ),
-            )
+            val layout = measureTextLayout(textMeasurer, layer, rect)
             val cx = rect.left + layer.position.x * rect.width
             val cy = rect.top + layer.position.y * rect.height
             drawText(
                 textLayoutResult = layout,
                 topLeft = Offset(cx - layout.size.width / 2f, cy - layout.size.height / 2f),
             )
+            if (isSelected) {
+                val b = textBounds(textMeasurer, layer, rect)
+                drawRoundRect(
+                    color = SelectionColor,
+                    topLeft = Offset(b.left, b.top),
+                    size = Size(b.width, b.height),
+                    cornerRadius = CornerRadius(4f),
+                    style = Stroke(width = 2f),
+                )
+                val hs = 6f
+                listOf(
+                    Offset(b.left, b.top), Offset(b.right, b.top),
+                    Offset(b.left, b.bottom), Offset(b.right, b.bottom),
+                ).forEach { corner ->
+                    drawCircle(SelectionColor, hs, corner)
+                }
+            }
         }
 
         is Layer.Cover -> {
@@ -189,7 +258,7 @@ private fun DrawScope.drawLayer(
                 CoverMode.SOLID -> drawRect(
                     color = Color(layer.color),
                     topLeft = Offset(x, y),
-                    size = androidx.compose.ui.geometry.Size(w, h),
+                    size = Size(w, h),
                 )
             }
         }
