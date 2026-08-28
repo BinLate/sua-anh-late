@@ -4,6 +4,8 @@ import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.annotation.WorkerThread
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 
 /**
@@ -14,6 +16,13 @@ object EditorProcessor {
 
     /** Max dimension used for the in-memory preview bitmap to keep memory low. */
     private const val PREVIEW_MAX = 2048
+
+    /** Maps a user strength (1..10) to the actual downscale divisor used for blur. */
+    fun blurDivisor(strength: Int): Int {
+        val clamped = strength.coerceIn(1, 10)
+        // 1 -> 4 (subtle), 10 -> 64 (very strong); linear in between.
+        return 4 + (clamped - 1) * 6
+    }
 
     /** Decode the photo, downsampled for preview. */
     fun decodePreview(resolver: ContentResolver, uri: Uri): Bitmap {
@@ -51,6 +60,39 @@ object EditorProcessor {
         val sH = (bmp.height / 32).coerceAtLeast(1)
         val small = Bitmap.createScaledBitmap(bmp, sW, sH, true)
         return Bitmap.createScaledBitmap(small, bmp.width, bmp.height, true)
+    }
+
+    // Cache of blurred variants keyed by strength, per source identity.
+    private val blurCache = ConcurrentHashMap<String, Bitmap>()
+
+    /** Clears cached blurred bitmaps (call when a new image is loaded). */
+    fun clearBlurCache() {
+        blurCache.values.forEach { it.recycle() }
+        blurCache.clear()
+    }
+
+    /**
+     * Returns a blurred copy of [bmp] for the given [strength]. Results are
+     * cached per (source identity + strength) so slider changes stay cheap.
+     * Keep at most two cached variants to bound memory.
+     */
+    @WorkerThread
+    fun blurredFor(source: Bitmap, strength: Int): Bitmap {
+        val key = "${source.generationId}:${strength.coerceIn(1, 10)}"
+        blurCache[key]?.let { if (!it.isRecycled) return it }
+        val divisor = blurDivisor(strength)
+        val sW = (source.width / divisor).coerceAtLeast(1)
+        val sH = (source.height / divisor).coerceAtLeast(1)
+        val small = Bitmap.createScaledBitmap(source, sW, sH, true)
+        val result = Bitmap.createScaledBitmap(small, source.width, source.height, true)
+        small.recycle()
+        blurCache[key] = result
+        while (blurCache.size > 2) {
+            val eldest = blurCache.entries.firstOrNull { it.key != key } ?: break
+            eldest.value.recycle()
+            blurCache.remove(eldest.key)
+        }
+        return result
     }
 
     /** Mosaic / pixelate produced by a strong nearest-neighbour downsample. */

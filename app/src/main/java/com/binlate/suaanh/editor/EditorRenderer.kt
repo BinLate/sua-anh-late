@@ -8,6 +8,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import com.binlate.suaanh.editor.model.CoverMode
 import com.binlate.suaanh.editor.model.Layer
+import com.binlate.suaanh.editor.model.ShapeKind
 
 /**
  * Rasterizes layers onto a bitmap. Used for the final export so the saved
@@ -26,6 +27,8 @@ object EditorRenderer {
                 is Layer.Stroke -> drawStroke(canvas, layer, base.width, base.height, shorter.toFloat())
                 is Layer.Text -> drawText(canvas, layer, base.width, base.height)
                 is Layer.Cover -> drawCover(canvas, base, layer)
+                is Layer.Shape -> drawShape(canvas, layer, base.width, base.height, shorter.toFloat())
+                is Layer.BlurStroke -> drawBlurStroke(canvas, base, layer, shorter.toFloat())
             }
         }
         return out
@@ -77,8 +80,6 @@ object EditorRenderer {
             layer.bottom * base.height,
         )
         when (layer.mode) {
-            CoverMode.BLUR ->
-                canvas.drawBitmap(EditorProcessor.blur(base), null, rect, Paint(Paint.FILTER_BITMAP_FLAG))
             CoverMode.PIXELATE ->
                 canvas.drawBitmap(EditorProcessor.pixelate(base), null, rect, Paint(Paint.FILTER_BITMAP_FLAG))
             CoverMode.SOLID ->
@@ -87,5 +88,64 @@ object EditorRenderer {
                     style = Paint.Style.FILL
                 })
         }
+    }
+
+    private fun drawShape(
+        canvas: Canvas,
+        layer: Layer.Shape,
+        w: Int,
+        h: Int,
+        shorter: Float,
+    ) {
+        val rect = RectF(
+            layer.left * w,
+            layer.top * h,
+            layer.right * w,
+            layer.bottom * h,
+        )
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = layer.color
+            style = Paint.Style.STROKE
+            strokeWidth = layer.strokeFraction * shorter
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        when (layer.kind) {
+            ShapeKind.ELLIPSE -> canvas.drawOval(rect, paint)
+            ShapeKind.RECT -> canvas.drawRect(rect, paint)
+        }
+    }
+
+    /**
+     * Applies a real blur to the region covered by the blur stroke: the blurred
+     * source is drawn only where the stroke path (inflated by the brush size) is.
+     */
+    private fun drawBlurStroke(
+        canvas: Canvas,
+        base: Bitmap,
+        layer: Layer.BlurStroke,
+        shorter: Float,
+    ) {
+        if (layer.points.isEmpty()) return
+        val stroke = android.graphics.Path()
+        layer.points.forEachIndexed { i, p ->
+            val x = p.x * base.width
+            val y = p.y * base.height
+            if (i == 0) stroke.moveTo(x, y) else stroke.lineTo(x, y)
+        }
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = layer.brushFraction * 2f * shorter
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        val fill = android.graphics.Path()
+        strokePaint.getFillPath(stroke, fill)
+
+        val blurred = EditorProcessor.blurredFor(base, layer.strength)
+        val save = canvas.save()
+        canvas.clipPath(fill)
+        canvas.drawBitmap(blurred, 0f, 0f, null)
+        canvas.restoreToCount(save)
     }
 }

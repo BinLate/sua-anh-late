@@ -14,9 +14,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.binlate.suaanh.editor.model.CoverMode
 import com.binlate.suaanh.editor.model.EditorTool
+import com.binlate.suaanh.editor.model.Handle
 import com.binlate.suaanh.editor.model.Layer
+import com.binlate.suaanh.editor.model.ShapeKind
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 
@@ -26,8 +31,6 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     var imageUri by mutableStateOf<Uri?>(null)
         private set
     var preview by mutableStateOf<Bitmap?>(null)
-        private set
-    var blurBitmap by mutableStateOf<Bitmap?>(null)
         private set
     var pixelBitmap by mutableStateOf<Bitmap?>(null)
         private set
@@ -47,6 +50,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         private set
     private var baseBeforeAction: List<Layer>? = null
 
+    // ---------- dirty state (for the "choose another image" flow) ----------
+    private var savedUri: Uri? = null
+    private var savedLayers: List<Layer> = emptyList()
+
+    /** True only after a real modification that is not saved yet. */
+    val isDirty: Boolean
+        get() = imageUri != null && (layers != savedLayers || imageUri != savedUri)
+
     // ---------- active tool ----------
     var tool by mutableStateOf(EditorTool.PEN)
         private set
@@ -64,8 +75,45 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     var textColor by mutableStateOf(Color(0xFFFFFFFF))
     var textSizeFraction by mutableStateOf(0.06f)    // of image width
 
+    // ---------- shape settings ----------
+    var shapeKind by mutableStateOf(ShapeKind.ELLIPSE)
+    var shapeColor by mutableStateOf(Color(0xFFFFEB3B))
+    var shapeStrokeFraction by mutableStateOf(0.004f) // of shorter edge
+
+    // ---------- blur settings ----------
+    var blurBrushFraction by mutableStateOf(0.02f)    // brush radius, of shorter edge
+    var blurStrength by mutableStateOf(5)             // 1..10, maps to a real blur radius
+
+    // Precomputed blurred preview bitmap for the current strength (background task).
+    var blurStrengthBitmap by mutableStateOf<Bitmap?>(null)
+        private set
+
+    // LRU cache of preview blurred bitmaps per strength (for rendering strokes).
+    private val previewBlurCache = object : LinkedHashMap<Int, Bitmap>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Bitmap>): Boolean = size > 3
+    }
+    var previewBlurVersion by mutableStateOf(0)
+        private set
+
+    /**
+     * Returns the preview bitmap blurred at [strength], or null while it is
+     * being computed in the background (recomposition happens via
+     * [previewBlurVersion]).
+     */
+    fun previewBlurredBitmap(strength: Int): Bitmap? {
+        val src = preview ?: return null
+        val s = strength.coerceIn(1, 10)
+        previewBlurCache[s]?.let { return it }
+        viewModelScope.launch(Dispatchers.Default) {
+            val b = EditorProcessor.blurredFor(src, s)
+            previewBlurCache[s] = b
+            previewBlurVersion++
+        }
+        return null
+    }
+
     // ---------- cover settings ----------
-    var coverMode by mutableStateOf(CoverMode.BLUR)
+    var coverMode by mutableStateOf(CoverMode.SOLID)
     var coverColor by mutableStateOf(Color(0xFF000000))
 
     private val coverArgb: Int
@@ -89,12 +137,37 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private var textSessionBase: List<Layer>? = null
     private var textSessionOn = false
 
+    // ---------- shape selection / editing ----------
+    var selectedShapeId by mutableStateOf<Long?>(null)
+        private set
+    private var movingShapeId: Long? = null
+    private var shapeMoveOriginal: Layer.Shape? = null
+    private var resizingHandle: Handle? = null
+    private var resizeOriginal: Layer.Shape? = null
+    private var resizeStartOffset: Offset = Offset.Zero
+    var draftShape by mutableStateOf<Layer.Shape?>(null)
+        private set
+    private var draftShapeStart: Offset? = null
+    private var nextShapeId = 1L
+
+    // ---------- blur stroke drafting ----------
+    var draftBlur by mutableStateOf<Layer.BlurStroke?>(null)
+        private set
+    private var draftBlurPoints = mutableListOf<Offset>()
+
     /** The currently selected text layer, or null when none. */
     val selectedText: Layer.Text?
         get() = layers.lastOrNull { it is Layer.Text && it.id == selectedTextId } as Layer.Text?
 
     fun findText(id: Long): Layer.Text? =
         layers.lastOrNull { it is Layer.Text && it.id == id } as Layer.Text?
+
+    /** The currently selected shape layer, or null when none. */
+    val selectedShape: Layer.Shape?
+        get() = layers.lastOrNull { it is Layer.Shape && it.id == selectedShapeId } as Layer.Shape?
+
+    fun findShape(id: Long): Layer.Shape? =
+        layers.lastOrNull { it is Layer.Shape && it.id == id } as Layer.Shape?
 
     // ---------------- Image load ----------------
     fun setImage(uri: Uri) {
@@ -104,13 +177,38 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             val resolver = getApplication<Application>().contentResolver
             val bmp = EditorProcessor.decodePreview(resolver, uri)
             preview = bmp
-            blurBitmap = EditorProcessor.blur(bmp)
             pixelBitmap = EditorProcessor.pixelate(bmp)
             originalWidth = bmp.width
             originalHeight = bmp.height
+            refreshBlurStrengthBitmap()
+            savedUri = uri
+            savedLayers = emptyList()
         }.onFailure {
             imageUri = null
         }
+    }
+
+    /** Recomputes the blurred preview bitmap for the current strength off the main thread. */
+    private fun refreshBlurStrengthBitmap() {
+        val bmp = preview ?: return
+        val strength = blurStrength
+        viewModelScope.launch(Dispatchers.Default) {
+            val blurred = EditorProcessor.blurredFor(bmp, strength)
+            blurStrengthBitmap = blurred
+        }
+    }
+
+    fun updateBlurStrength(strength: Int) {
+        val clamped = strength.coerceIn(1, 10)
+        if (clamped == blurStrength) return
+        blurStrength = clamped
+        refreshBlurStrengthBitmap()
+    }
+
+    /** Marks the current state as saved (after a successful export). */
+    fun markSaved() {
+        savedUri = imageUri
+        savedLayers = layers
     }
 
     private fun clear() {
@@ -125,12 +223,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         textSessionBase = null
         textSessionOn = false
         nextTextId = 1L
+        selectedShapeId = null
+        movingShapeId = null
+        resizingHandle = null
+        draftShape = null
+        draftBlur = null
+        EditorProcessor.clearBlurCache()
+        previewBlurCache.clear()
+        previewBlurVersion++
         preview?.recycle()
         preview = null
-        blurBitmap?.recycle()
-        blurBitmap = null
         pixelBitmap?.recycle()
         pixelBitmap = null
+        blurStrengthBitmap = null
     }
 
     // ---------------- tool ----------------
@@ -330,11 +435,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         selectedTextId = id
     }
 
-    // ---- property editing of the selected text (size / color), with undo session ----
+    // ---- property editing of the selected layer (text or shape), with undo session ----
+
+    private val selectedLayerId: Long?
+        get() = selectedTextId ?: selectedShapeId
 
     /** Open an undo session so a sequence of live edits commits as one history entry. */
-    fun beginTextPropertySession() {
-        if (selectedTextId != null && !textSessionOn) {
+    fun beginLayerPropertySession() {
+        if (selectedLayerId != null && !textSessionOn) {
             textSessionBase = layers
             textSessionOn = true
             future.clear()
@@ -343,7 +451,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Live-preview font size; when a text is selected it updates that layer immediately. */
     fun previewTextSize(fraction: Float) {
-        beginTextPropertySession()
+        beginLayerPropertySession()
         textSizeFraction = fraction
         val id = selectedTextId ?: return
         layers = layers.map {
@@ -353,7 +461,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Live-preview color; when a text is selected it updates that layer immediately. */
     fun previewTextColor(color: Color) {
-        beginTextPropertySession()
+        beginLayerPropertySession()
         textColor = color
         val id = selectedTextId ?: return
         layers = layers.map {
@@ -361,8 +469,28 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /** Commit the open text property session as a single undo step. */
-    fun commitTextPropertySession() {
+    /** Live-preview stroke color; when a shape is selected it updates that layer immediately. */
+    fun previewShapeColor(color: Color) {
+        beginLayerPropertySession()
+        shapeColor = color
+        val id = selectedShapeId ?: return
+        layers = layers.map {
+            if (it is Layer.Shape && it.id == id) it.copy(color = color.toArgb()) else it
+        }
+    }
+
+    /** Live-preview stroke width; when a shape is selected it updates that layer immediately. */
+    fun previewShapeStroke(fraction: Float) {
+        beginLayerPropertySession()
+        shapeStrokeFraction = fraction
+        val id = selectedShapeId ?: return
+        layers = layers.map {
+            if (it is Layer.Shape && it.id == id) it.copy(strokeFraction = fraction) else it
+        }
+    }
+
+    /** Commit the open property session as a single undo step. */
+    fun commitLayerPropertySession() {
         if (!textSessionOn) return
         textSessionOn = false
         val base = textSessionBase
@@ -372,11 +500,169 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /** Discard the open session and restore the state before it (used by Cancel). */
-    fun cancelTextPropertySession() {
+    fun cancelLayerPropertySession() {
         if (!textSessionOn) return
         textSessionOn = false
         layers = textSessionBase ?: layers
         textSessionBase = null
+    }
+
+    // ---------------- shapes ----------------
+
+    /** Handle a tap on the canvas in the SHAPE tool: select a shape or deselect. */
+    fun handleShapeTap(tapped: Layer.Shape?) {
+        selectedShapeId = tapped?.id
+    }
+
+    /**
+     * Begin a drag on a shape. [handle] != null means resizing that handle,
+     * otherwise the whole shape is moved (when [tapped] != null).
+     */
+    fun beginShapeInteraction(tapped: Layer.Shape?, handle: Handle?, norm: Offset): Boolean {
+        if (tapped == null) {
+            selectedShapeId = null
+            return false
+        }
+        beginAction()
+        selectedShapeId = tapped.id
+        if (handle != null) {
+            resizingHandle = handle
+            resizeOriginal = tapped
+            resizeStartOffset = norm
+        } else {
+            movingShapeId = tapped.id
+            shapeMoveOriginal = tapped
+            dragStartOffset = norm
+        }
+        return true
+    }
+
+    fun continueShapeDrag(norm: Offset) {
+        val handle = resizingHandle
+        val resizeBase = resizeOriginal
+        if (handle != null && resizeBase != null) {
+            val dx = norm.x - resizeStartOffset.x
+            val dy = norm.y - resizeStartOffset.y
+            var l = resizeBase.left
+            var t = resizeBase.top
+            var r = resizeBase.right
+            var b = resizeBase.bottom
+            if (handle == Handle.TL || handle == Handle.BL || handle == Handle.LC) l = (resizeBase.left + dx).coerceIn(0f, 1f)
+            if (handle == Handle.TR || handle == Handle.BR || handle == Handle.RC) r = (resizeBase.right + dx).coerceIn(0f, 1f)
+            if (handle == Handle.TL || handle == Handle.TR || handle == Handle.TC) t = (resizeBase.top + dy).coerceIn(0f, 1f)
+            if (handle == Handle.BL || handle == Handle.BR || handle == Handle.BC) b = (resizeBase.bottom + dy).coerceIn(0f, 1f)
+            layers = layers.map {
+                if (it is Layer.Shape && it.id == resizeBase.id) {
+                    it.copy(left = min(l, r), top = min(t, b), right = max(l, r), bottom = max(t, b))
+                } else {
+                    it
+                }
+            }
+            return
+        }
+        val id = movingShapeId
+        val moved = shapeMoveOriginal
+        if (id != null && moved != null) {
+            val dx = (norm.x - dragStartOffset.x).coerceIn(-moved.left, 1f - moved.right)
+            val dy = (norm.y - dragStartOffset.y).coerceIn(-moved.top, 1f - moved.bottom)
+            layers = layers.map {
+                if (it is Layer.Shape && it.id == id) {
+                    it.copy(
+                        left = moved.left + dx,
+                        top = moved.top + dy,
+                        right = moved.right + dx,
+                        bottom = moved.bottom + dy,
+                    )
+                } else {
+                    it
+                }
+            }
+        }
+    }
+
+    fun endShapeDrag() {
+        if (movingShapeId != null || resizingHandle != null) finalize(layers)
+        movingShapeId = null
+        shapeMoveOriginal = null
+        resizingHandle = null
+        resizeOriginal = null
+    }
+
+    /** Drag-create a new shape of [kind]. */
+    fun beginShapeCreation(kind: ShapeKind, norm: Offset) {
+        beginAction()
+        draftShapeStart = norm
+        draftShape = Layer.Shape(
+            id = nextShapeId++,
+            kind = kind,
+            left = norm.x,
+            top = norm.y,
+            right = norm.x,
+            bottom = norm.y,
+            color = shapeColor.toArgb(),
+            strokeFraction = shapeStrokeFraction,
+        )
+        layers = baseBeforeAction.orEmpty() + draftShape!!
+    }
+
+    fun continueShapeCreation(norm: Offset) {
+        val start = draftShapeStart ?: return
+        val draft = draftShape ?: return
+        draftShape = draft.copy(
+            left = min(start.x, norm.x),
+            top = min(start.y, norm.y),
+            right = max(start.x, norm.x),
+            bottom = max(start.y, norm.y),
+        )
+        layers = baseBeforeAction.orEmpty() + draftShape!!
+    }
+
+    fun endShapeCreation() {
+        val draft = draftShape ?: return
+        draftShape = null
+        draftShapeStart = null
+        if (draft.width > 0.01f || draft.height > 0.01f) {
+            finalize(baseBeforeAction.orEmpty() + draft)
+            selectedShapeId = draft.id
+        } else {
+            layers = baseBeforeAction.orEmpty()
+            baseBeforeAction = null
+        }
+    }
+
+    // ---------------- blur strokes ----------------
+
+    fun beginBlurStroke(norm: Offset) {
+        beginAction()
+        draftBlurPoints = mutableListOf(norm)
+        draftBlur = Layer.BlurStroke(draftBlurPoints.toList(), blurBrushFraction, blurStrength)
+        layers = baseBeforeAction.orEmpty() + draftBlur!!
+    }
+
+    fun continueBlurStroke(norm: Offset) {
+        val draft = draftBlur ?: return
+        val last = draftBlurPoints.lastOrNull()
+        if (last != null) {
+            val dx = norm.x - last.x
+            val dy = norm.y - last.y
+            // Skip micro movements to keep the path light.
+            if (dx * dx + dy * dy < 0.000004f) return
+        }
+        draftBlurPoints.add(norm)
+        draftBlur = draft.copy(points = draftBlurPoints.toList())
+        layers = baseBeforeAction.orEmpty() + draftBlur!!
+    }
+
+    fun endBlurStroke() {
+        val draft = draftBlur ?: return
+        draftBlur = null
+        if (draftBlurPoints.isNotEmpty()) {
+            finalize(baseBeforeAction.orEmpty() + draft.copy(points = draftBlurPoints.toList()))
+        } else {
+            layers = baseBeforeAction.orEmpty()
+            baseBeforeAction = null
+        }
+        draftBlurPoints.clear()
     }
 
     // ---------------- export ----------------
@@ -438,7 +724,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         preview?.recycle()
-        blurBitmap?.recycle()
+        blurStrengthBitmap?.recycle()
+        previewBlurCache.values.forEach { it.recycle() }
+        previewBlurCache.clear()
         pixelBitmap?.recycle()
         super.onCleared()
     }

@@ -1,6 +1,7 @@
 package com.binlate.suaanh.ui
 
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -12,8 +13,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,6 +61,7 @@ fun EditorScreen(state: EditorViewModel) {
     var addTextOpen by remember { mutableStateOf(false) }
     var editTextOpen by remember { mutableStateOf(false) }
     var editTargetId by remember { mutableStateOf<Long?>(null) }
+    var confirmSwitch by remember { mutableStateOf(false) }
 
     // When the view model requests editing an existing text layer, open the editor.
     LaunchedEffect(state.editRequestId) {
@@ -73,7 +77,7 @@ fun EditorScreen(state: EditorViewModel) {
         ActivityResultContracts.PickVisualMedia()
     ) { uri -> uri?.let { state.setImage(it) } }
 
-    fun saveAndShare(share: Boolean) {
+    fun saveCurrentImage(onSuccess: (Uri) -> Unit = {}) {
         scope.launch(Dispatchers.IO) {
             val uri = state.exportAndGetUri()
             withContext(Dispatchers.Main) {
@@ -81,16 +85,36 @@ fun EditorScreen(state: EditorViewModel) {
                     Toast.makeText(context, R.string.save_failed, Toast.LENGTH_SHORT).show()
                     return@withContext
                 }
+                state.markSaved()
                 Toast.makeText(context, R.string.saved, Toast.LENGTH_SHORT).show()
-                if (share) {
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "image/jpeg"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    context.startActivity(Intent.createChooser(intent, null))
-                }
+                onSuccess(uri)
             }
+        }
+    }
+
+    fun saveAndShare(share: Boolean) {
+        saveCurrentImage { uri ->
+            if (share) {
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(Intent.createChooser(intent, null))
+            }
+        }
+    }
+
+    fun openPicker() {
+        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+
+    // "Choose another image": no prompt when clean, confirm when dirty.
+    fun onChooseAnotherImage() {
+        if (state.isDirty) {
+            confirmSwitch = true
+        } else {
+            openPicker()
         }
     }
 
@@ -99,6 +123,12 @@ fun EditorScreen(state: EditorViewModel) {
             TopAppBar(
                 title = { Text(context.getString(R.string.app_name)) },
                 actions = {
+                    IconButton(onClick = { onChooseAnotherImage() }) {
+                        Icon(
+                            Icons.Filled.AddPhotoAlternate,
+                            contentDescription = context.getString(R.string.choose_another_image),
+                        )
+                    }
                     IconButton(onClick = { saveAndShare(false) }) {
                         Icon(Icons.Filled.Save, contentDescription = context.getString(R.string.save))
                     }
@@ -139,6 +169,31 @@ fun EditorScreen(state: EditorViewModel) {
             // Action bar
             UndoRedoBar(state, Modifier.fillMaxWidth())
         }
+    }
+
+    if (confirmSwitch) {
+        AlertDialog(
+            onDismissRequest = { confirmSwitch = false },
+            title = { Text(context.getString(R.string.switch_title)) },
+            text = { Text(context.getString(R.string.switch_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmSwitch = false
+                    saveCurrentImage { _ -> openPicker() }
+                }) { Text(context.getString(R.string.switch_save)) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        confirmSwitch = false
+                        openPicker()
+                    }) { Text(context.getString(R.string.switch_discard)) }
+                    TextButton(onClick = { confirmSwitch = false }) {
+                        Text(context.getString(R.string.switch_cancel))
+                    }
+                }
+            },
+        )
     }
 
     colorPicker?.let { request ->

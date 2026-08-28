@@ -2,8 +2,14 @@ package com.binlate.suaanh.editor.model
 
 import androidx.compose.ui.geometry.Offset
 
-enum class EditorTool { PEN, HIGHLIGHT, TEXT, COVER }
-enum class CoverMode { BLUR, PIXELATE, SOLID }
+enum class EditorTool { PEN, HIGHLIGHT, TEXT, COVER, SHAPE, BLUR }
+enum class CoverMode { SOLID, PIXELATE }
+
+/** Kind of outline shape that can be drawn and edited. */
+enum class ShapeKind { ELLIPSE, RECT }
+
+/** Resize handles of a selected shape (corners resize both axes, edges one axis). */
+enum class Handle { TL, TR, BL, BR, TC, BC, LC, RC }
 
 /**
  * A single editing layer placed over the source image.
@@ -40,8 +46,33 @@ sealed class Layer {
         val color: Int,               // used when mode == SOLID
     ) : Layer() {
         val width: Float get() = right - left
-        val height: Float get() = top - bottom
+        val height: Float get() = bottom - top
     }
+
+    /** Editable outline shape (ellipse or rectangle) with its own stroke settings. */
+    data class Shape(
+        val id: Long,                  // unique id for selection/editing
+        val kind: ShapeKind,
+        val left: Float,
+        val top: Float,
+        val right: Float,
+        val bottom: Float,             // normalized bounds
+        val color: Int,                // stroke ARGB
+        val strokeFraction: Float,     // stroke width as fraction of the shorter image edge
+    ) : Layer() {
+        val width: Float get() = right - left
+        val height: Float get() = bottom - top
+    }
+
+    /**
+     * A painted blur stroke. The affected region is the stroke path inflated by
+     * the brush radius; [strength] selects the actual blur radius (1..10).
+     */
+    data class BlurStroke(
+        val points: List<Offset>,      // normalized stroke path
+        val brushFraction: Float,      // brush radius as fraction of the shorter image edge
+        val strength: Int,             // 1..10, maps to a real blur radius
+    ) : Layer()
 }
 
 /** Immutable snapshot of the full editing stack (used for undo/redo). */

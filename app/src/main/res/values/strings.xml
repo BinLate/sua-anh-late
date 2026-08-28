@@ -22,4 +22,10 @@
     <string name="save_failed">Không thể lưu ảnh</string>
     <string name="no_image">Hãy chọn một ảnh trước</string>
     <string name="text_hint">Nhập nội dung...</string>
+    <string name="choose_another_image">Chọn ảnh khác</string>
+    <string name="switch_title">Đổi ảnh?</string>
+    <string name="switch_message">Bạn có những thay đổi chưa lưu. Bạn muốn làm gì với hình hiện tại?</string>
+    <string name="switch_save">Lưu lại</string>
+    <string name="switch_discard">Bỏ qua</string>
+    <string name="switch_cancel">Hủy</string>
 </resources>

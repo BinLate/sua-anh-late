@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.binlate.suaanh.editor.EditorViewModel
 import com.binlate.suaanh.editor.model.CoverMode
 import com.binlate.suaanh.editor.model.EditorTool
+import com.binlate.suaanh.editor.model.ShapeKind
 import kotlin.math.roundToInt
 
 /**
@@ -75,7 +76,7 @@ fun ToolControls(
 
             ColorControls(curColor, { color ->
                 state.previewTextColor(color)
-                state.commitTextPropertySession()
+                state.commitLayerPropertySession()
             }, {
                 openColorPicker(
                     ColorPickerRequest(
@@ -83,9 +84,9 @@ fun ToolControls(
                         onLive = { state.previewTextColor(it) },
                         onApply = {
                             state.previewTextColor(it)
-                            state.commitTextPropertySession()
+                            state.commitLayerPropertySession()
                         },
-                        onCancel = { state.cancelTextPropertySession() },
+                        onCancel = { state.cancelLayerPropertySession() },
                     )
                 )
             }, modifier)
@@ -95,7 +96,7 @@ fun ToolControls(
                 curSize,
                 0.02f..0.3f,
                 onChange = { state.previewTextSize(it) },
-                onValueChangeFinished = { state.commitTextPropertySession() },
+                onValueChangeFinished = { state.commitLayerPropertySession() },
             )
 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -111,6 +112,77 @@ fun ToolControls(
                         Text("Sửa chữ")
                     }
                 }
+            }
+        }
+
+        EditorTool.SHAPE -> {
+            val sel = state.selectedShape
+            val curColor = sel?.let { Color(it.color) } ?: state.shapeColor
+            val curStroke = sel?.strokeFraction ?: state.shapeStrokeFraction
+
+            // Shape kind chips
+            Row(
+                modifier = modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = state.shapeKind == ShapeKind.ELLIPSE,
+                    onClick = { state.shapeKind = ShapeKind.ELLIPSE },
+                    label = { Text("Ellipse") },
+                )
+                FilterChip(
+                    selected = state.shapeKind == ShapeKind.RECT,
+                    onClick = { state.shapeKind = ShapeKind.RECT },
+                    label = { Text("Chữ nhật") },
+                )
+            }
+
+            // Stroke color edits the selected shape live
+            ColorControls(curColor, { color ->
+                state.previewShapeColor(color)
+                state.commitLayerPropertySession()
+            }, {
+                openColorPicker(
+                    ColorPickerRequest(
+                        initial = curColor,
+                        onLive = { state.previewShapeColor(it) },
+                        onApply = {
+                            state.previewShapeColor(it)
+                            state.commitLayerPropertySession()
+                        },
+                        onCancel = { state.cancelLayerPropertySession() },
+                    )
+                )
+            }, modifier)
+
+            // Stroke width edits the selected shape live (one undo step per drag)
+            SizeControl(
+                "Độ dày viền",
+                curStroke,
+                0.0005f..0.02f,
+                onChange = { state.previewShapeStroke(it) },
+                onValueChangeFinished = { state.commitLayerPropertySession() },
+            )
+        }
+
+        EditorTool.BLUR -> {
+            // Brush size: where/how large the blur stroke is.
+            SizeControl("Kích thước cọ", state.blurBrushFraction, 0.005f..0.08f) {
+                state.blurBrushFraction = it
+            }
+            // Blur strength: how strong the blur is (real blur radius).
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                Text(
+                    "Độ mạnh làm mờ: ${state.blurStrength}/10",
+                    style = MaterialTheme.typography.labelMedium,
+                    textAlign = TextAlign.Start,
+                )
+                Slider(
+                    value = state.blurStrength.toFloat(),
+                    onValueChange = { state.updateBlurStrength(it.roundToInt()) },
+                    valueRange = 1f..10f,
+                    steps = 8,
+                )
             }
         }
 
@@ -134,11 +206,6 @@ private fun CoverModeSelector(state: EditorViewModel, modifier: Modifier = Modif
         modifier = modifier.padding(horizontal = 12.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        FilterChip(
-            selected = state.coverMode == CoverMode.BLUR,
-            onClick = { state.coverMode = CoverMode.BLUR },
-            label = { Text("Làm mờ") },
-        )
         FilterChip(
             selected = state.coverMode == CoverMode.PIXELATE,
             onClick = { state.coverMode = CoverMode.PIXELATE },
