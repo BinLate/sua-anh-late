@@ -46,6 +46,8 @@ FEATURE_MARKERS = {
     "cover (pixelate/solid)": ["CoverMode.PIXELATE", "CoverMode.SOLID"],
     "shape tool": ["EditorTool.SHAPE", "ShapeKind", "Layer.Shape", "drawShape"],
     "blur brush tool": ["EditorTool.BLUR", "Layer.BlurStroke", "drawBlurStroke", "previewBlurredBitmap"],
+    "delete layer": ["deleteSelectedLayer"],
+    "text rotate/scale": ["previewTextRotation", "previewTextScale", "rotation", "scale"],
     "color picker": ["ColorPickerDialog"],
     "size controls": ["SizeControl"],
     "undo/redo": ["fun undo", "fun redo"],

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -73,6 +74,8 @@ fun ToolControls(
             val sel = state.selectedText
             val curColor = sel?.let { Color(it.color) } ?: state.textColor
             val curSize = sel?.sizeFraction ?: state.textSizeFraction
+            val curRotation = sel?.rotation ?: 0f
+            val curScale = sel?.scale ?: 1f
 
             ColorControls(curColor, { color ->
                 state.previewTextColor(color)
@@ -99,6 +102,22 @@ fun ToolControls(
                 onValueChangeFinished = { state.commitLayerPropertySession() },
             )
 
+            NumberSlider(
+                "Xoay (°)",
+                curRotation,
+                -180f..180f,
+                onChange = { state.previewTextRotation(it) },
+                onValueChangeFinished = { state.commitLayerPropertySession() },
+            )
+
+            NumberSlider(
+                "Tỷ lệ",
+                curScale,
+                0.5f..3f,
+                onChange = { state.previewTextScale(it) },
+                onValueChangeFinished = { state.commitLayerPropertySession() },
+            )
+
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = onAddText) {
                     Icon(Icons.Filled.Add, null, Modifier.size(18.dp))
@@ -110,6 +129,11 @@ fun ToolControls(
                         Icon(Icons.Filled.Edit, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Sửa chữ")
+                    }
+                    TextButton(onClick = { state.deleteSelectedLayer() }) {
+                        Icon(Icons.Filled.Delete, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Xóa")
                     }
                 }
             }
@@ -163,6 +187,16 @@ fun ToolControls(
                 onChange = { state.previewShapeStroke(it) },
                 onValueChangeFinished = { state.commitLayerPropertySession() },
             )
+
+            if (sel != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { state.deleteSelectedLayer() }) {
+                        Icon(Icons.Filled.Delete, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Xóa")
+                    }
+                }
+            }
         }
 
         EditorTool.BLUR -> {
@@ -263,6 +297,31 @@ private fun SizeControl(
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         Text(
             "$label: $percent",
+            style = MaterialTheme.typography.labelMedium,
+            textAlign = TextAlign.Start,
+        )
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            onValueChangeFinished = onValueChangeFinished,
+            valueRange = range,
+        )
+    }
+}
+
+/** Slider that displays the raw numeric value (used for rotation and scale). */
+@Composable
+private fun NumberSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChangeFinished: () -> Unit = {},
+    onChange: (Float) -> Unit,
+) {
+    val display = ((value * 100).roundToInt()) / 100f
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        Text(
+            "$label: $display",
             style = MaterialTheme.typography.labelMedium,
             textAlign = TextAlign.Start,
         )

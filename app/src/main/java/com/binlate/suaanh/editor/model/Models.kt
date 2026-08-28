@@ -34,6 +34,8 @@ sealed class Layer {
         val color: Int,               // ARGB
         val sizeFraction: Float,      // text paint size as fraction of image width
         val bold: Boolean = true,
+        val rotation: Float = 0f,     // rotation in degrees (0..360)
+        val scale: Float = 1f,        // extra size multiplier on top of sizeFraction
     ) : Layer()
 
     /** Rectangular region used to hide/highlight parts of the photo. */

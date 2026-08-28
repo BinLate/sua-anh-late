@@ -63,13 +63,20 @@ object EditorRenderer {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = layer.color
             textAlign = Paint.Align.CENTER
-            textSize = layer.sizeFraction * w
+            textSize = layer.sizeFraction * layer.scale * w
             typeface = if (layer.bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         }
         val x = layer.position.x * w
         val y = layer.position.y * h
         val baseline = y - (paint.descent() + paint.ascent()) / 2f
-        canvas.drawText(layer.content, x, baseline, paint)
+        if (layer.rotation != 0f) {
+            canvas.save()
+            canvas.rotate(layer.rotation, x, y)
+            canvas.drawText(layer.content, x, baseline, paint)
+            canvas.restore()
+        } else {
+            canvas.drawText(layer.content, x, baseline, paint)
+        }
     }
 
     private fun drawCover(canvas: Canvas, base: Bitmap, layer: Layer.Cover) {

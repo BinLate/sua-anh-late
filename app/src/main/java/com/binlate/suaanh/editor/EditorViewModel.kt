@@ -479,6 +479,45 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Live-preview text rotation; edits the selected text layer in place. */
+    fun previewTextRotation(degrees: Float) {
+        beginLayerPropertySession()
+        val id = selectedTextId ?: return
+        layers = layers.map {
+            if (it is Layer.Text && it.id == id) it.copy(rotation = degrees) else it
+        }
+    }
+
+    /** Live-preview text scale; edits the selected text layer in place. */
+    fun previewTextScale(scale: Float) {
+        beginLayerPropertySession()
+        val id = selectedTextId ?: return
+        layers = layers.map {
+            if (it is Layer.Text && it.id == id) it.copy(scale = scale) else it
+        }
+    }
+
+    /** Delete the currently selected text or shape layer (participates in undo/redo). */
+    fun deleteSelectedLayer() {
+        val textId = selectedTextId
+        val shapeId = selectedShapeId
+        when {
+            textId != null -> {
+                beginAction()
+                layers = layers.filterNot { it is Layer.Text && it.id == textId }
+                selectedTextId = null
+                editRequestId = null
+                finalize(layers)
+            }
+            shapeId != null -> {
+                beginAction()
+                layers = layers.filterNot { it is Layer.Shape && it.id == shapeId }
+                selectedShapeId = null
+                finalize(layers)
+            }
+        }
+    }
+
     /** Live-preview stroke width; when a shape is selected it updates that layer immediately. */
     fun previewShapeStroke(fraction: Float) {
         beginLayerPropertySession()

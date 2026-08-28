@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
@@ -38,9 +39,12 @@ import com.binlate.suaanh.editor.model.CoverMode
 import com.binlate.suaanh.editor.model.EditorTool
 import com.binlate.suaanh.editor.model.Handle
 import com.binlate.suaanh.editor.model.Layer
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 private val SelectionColor = Color(0xFF2196F3)
@@ -80,7 +84,7 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
             null
         } else {
             vm.layers.asReversed().firstNotNullOfOrNull { layer ->
-                if (layer is Layer.Text && textBounds(textMeasurer, layer, r).contains(pos)) {
+                if (layer is Layer.Text && textContains(textMeasurer, layer, r, pos)) {
                     layer
                 } else {
                     null
@@ -234,6 +238,26 @@ private fun textBounds(textMeasurer: TextMeasurer, layer: Layer.Text, rect: Rect
     )
 }
 
+/** Whether a screen point falls inside a (possibly rotated) text layer. */
+private fun textContains(
+    textMeasurer: TextMeasurer,
+    layer: Layer.Text,
+    rect: Rect,
+    pos: Offset,
+): Boolean {
+    if (layer.rotation == 0f) return textBounds(textMeasurer, layer, rect).contains(pos)
+    val b = textBounds(textMeasurer, layer, rect)
+    val cx = (b.left + b.right) / 2f
+    val cy = (b.top + b.bottom) / 2f
+    val rad = (-layer.rotation) * (PI.toFloat() / 180f)
+    val dx = pos.x - cx
+    val dy = pos.y - cy
+    val rx = dx * cos(rad) - dy * sin(rad)
+    val ry = dx * sin(rad) + dy * cos(rad)
+    val local = Offset(cx + rx, cy + ry)
+    return b.contains(local)
+}
+
 private fun measureTextLayout(
     textMeasurer: TextMeasurer,
     layer: Layer.Text,
@@ -242,7 +266,7 @@ private fun measureTextLayout(
     AnnotatedString(layer.content),
     style = TextStyle(
         color = Color(layer.color),
-        fontSize = TextUnit(layer.sizeFraction * rect.width, TextUnitType.Sp),
+        fontSize = TextUnit(layer.sizeFraction * layer.scale * rect.width, TextUnitType.Sp),
         fontWeight = if (layer.bold) FontWeight.Bold else FontWeight.Normal,
     ),
 )
@@ -351,12 +375,14 @@ private fun DrawScope.drawLayer(
             val layout = measureTextLayout(textMeasurer, layer, rect)
             val cx = rect.left + layer.position.x * rect.width
             val cy = rect.top + layer.position.y * rect.height
-            drawText(
-                textLayoutResult = layout,
-                topLeft = Offset(cx - layout.size.width / 2f, cy - layout.size.height / 2f),
-            )
-            if (isTextSelected) {
-                drawSelectionBox(textBounds(textMeasurer, layer, rect))
+            rotate(degrees = layer.rotation, pivot = Offset(cx, cy)) {
+                drawText(
+                    textLayoutResult = layout,
+                    topLeft = Offset(cx - layout.size.width / 2f, cy - layout.size.height / 2f),
+                )
+                if (isTextSelected) {
+                    drawSelectionBox(textBounds(textMeasurer, layer, rect))
+                }
             }
         }
 
