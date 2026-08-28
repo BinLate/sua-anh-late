@@ -41,7 +41,7 @@ private fun ToolChoice(label: String, icon: ImageVector, tool: EditorTool, state
     val selected = state.tool == tool
     FilterChip(
         selected = selected,
-        onClick = { state.setTool(tool) },
+        onClick = { state.selectTool(tool) },
         label = { Text(label) },
         leadingIcon = { Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp)) },
     )

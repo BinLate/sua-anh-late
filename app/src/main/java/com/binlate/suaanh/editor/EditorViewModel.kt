@@ -112,7 +112,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // ---------------- tool ----------------
-    fun setTool(t: EditorTool) {
+    fun selectTool(t: EditorTool) {
         tool = t
     }
 
@@ -314,18 +314,21 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         insertUri: Uri,
         values: ContentValues,
         bitmap: Bitmap,
-    ): Uri? = try {
-        resolver.openOutputStream(insertUri)?.use { stream ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
-        } ?: return null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            values.clear()
-            values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            resolver.update(insertUri, values, null, null)
+    ): Uri? {
+        return try {
+            val stream = resolver.openOutputStream(insertUri) ?: return null
+            stream.use {
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(insertUri, values, null, null)
+            }
+            insertUri
+        } catch (_: Exception) {
+            null
         }
-        insertUri
-    } catch (_: Exception) {
-        null
     }
 
     override fun onCleared() {

@@ -36,7 +36,7 @@ sealed class Layer {
         val bottom: Float,             // normalized bounds
         val mode: CoverMode,
         val color: Int,               // used when mode == SOLID
-    ) : Layer {
+    ) : Layer() {
         val width: Float get() = right - left
         val height: Float get() = top - bottom
     }

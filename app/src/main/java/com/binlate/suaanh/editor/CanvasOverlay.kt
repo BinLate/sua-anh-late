@@ -17,10 +17,13 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.toSp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.TextUnitType
 import com.binlate.suaanh.editor.model.CoverMode
 import com.binlate.suaanh.editor.model.EditorTool
 import com.binlate.suaanh.editor.model.Layer
@@ -99,7 +102,7 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
         val sourceW = imageBitmap.width.toFloat()
         val sourceH = imageBitmap.height.toFloat()
         vm.layers.forEach { layer ->
-            drawLayer(this, layer, rect, sourceW, sourceH, blurImage, pixelImage, textMeasurer, density)
+            drawLayer(layer, rect, sourceW, sourceH, blurImage, pixelImage, textMeasurer)
         }
     }
 }
@@ -120,7 +123,6 @@ private fun DrawScope.drawLayer(
     blurImage: ImageBitmap?,
     pixelImage: ImageBitmap?,
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
-    density: Density,
 ) {
     when (layer) {
         is Layer.Stroke -> {
@@ -143,8 +145,7 @@ private fun DrawScope.drawLayer(
         }
 
         is Layer.Text -> {
-            val textPx = layer.sizeFraction * rect.width
-            val fontSize = with(density) { textPx.toSp() }
+            val fontSize = TextUnit(layer.sizeFraction * rect.width, TextUnitType.Sp)
             val layout = textMeasurer.measure(
                 androidx.compose.ui.text.AnnotatedString(layer.content),
                 style = androidx.compose.ui.text.TextStyle(
@@ -155,7 +156,7 @@ private fun DrawScope.drawLayer(
             )
             val cx = rect.left + layer.position.x * rect.width
             val cy = rect.top + layer.position.y * rect.height
-            androidx.compose.ui.text.drawText(
+            drawText(
                 textLayoutResult = layout,
                 topLeft = Offset(cx - layout.size.width / 2f, cy - layout.size.height / 2f),
             )

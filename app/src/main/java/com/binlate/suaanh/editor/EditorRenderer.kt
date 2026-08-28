@@ -23,7 +23,7 @@ object EditorRenderer {
 
         for (layer in layers) {
             when (layer) {
-                is Layer.Stroke -> drawStroke(canvas, layer, base.width, base.height, shorter)
+                is Layer.Stroke -> drawStroke(canvas, layer, base.width, base.height, shorter.toFloat())
                 is Layer.Text -> drawText(canvas, layer, base.width, base.height)
                 is Layer.Cover -> drawCover(canvas, base, layer)
             }
