@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Sửa Ảnh</string>
+    <string name="pick_image">Chọn ảnh</string>
+    <string name="save">Lưu</string>
+    <string name="share">Chia sẻ</string>
+    <string name="undo">Hoàn tác</string>
+    <string name="redo">Làm lại</string>
+    <string name="tool_pen">Bút vẽ</string>
+    <string name="tool_highlight">Bút highlight</string>
+    <string name="tool_text">Chữ</string>
+    <string name="tool_cover">Che</string>
+    <string name="add_text">Nhập chữ</string>
+    <string name="ok">OK</string>
+    <string name="cancel">Hủy</string>
+    <string name="color">Màu</string>
+    <string name="size">Kích thước</string>
+    <string name="cover_blur">Làm mờ</string>
+    <string name="cover_pixel">Mosaic</string>
+    <string name="cover_solid">Khối màu</string>
+    <string name="saved">Đã lưu ảnh vào thư viện</string>
+    <string name="save_failed">Không thể lưu ảnh</string>
+    <string name="no_image">Hãy chọn một ảnh trước</string>
+    <string name="text_hint">Nhập nội dung...</string>
+</resources>
