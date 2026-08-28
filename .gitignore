@@ -25,4 +25,5 @@ local.properties
 captures/
 *.apk
 *.aab
+build*.log
 
