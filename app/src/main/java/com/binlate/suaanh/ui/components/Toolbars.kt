@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -42,6 +43,7 @@ fun ToolSelector(state: EditorViewModel, modifier: Modifier = Modifier) {
         ToolChoice("Che", Icons.Filled.Layers, EditorTool.COVER, state)
         ToolChoice("Hình", Icons.Filled.Category, EditorTool.SHAPE, state)
         ToolChoice("Làm mờ", Icons.Filled.BlurOn, EditorTool.BLUR, state)
+        ToolChoice("Mũi tên", Icons.Filled.NorthEast, EditorTool.ARROW, state)
     }
 }
 

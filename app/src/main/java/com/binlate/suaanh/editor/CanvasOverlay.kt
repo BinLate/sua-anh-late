@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
+import com.binlate.suaanh.editor.model.ArrowEnd
 import com.binlate.suaanh.editor.model.CoverMode
 import com.binlate.suaanh.editor.model.EditorTool
 import com.binlate.suaanh.editor.model.Handle
@@ -42,6 +43,7 @@ import com.binlate.suaanh.editor.model.Layer
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -122,6 +124,39 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
         }
     }
 
+    // Hit-test the topmost arrow whose shaft or arrowhead is near a screen point.
+    val hitArrow: (Offset) -> Layer.Arrow? = { pos ->
+        val r = fitRect
+        if (r == null) {
+            null
+        } else {
+            vm.layers.asReversed().firstNotNullOfOrNull { layer ->
+                if (layer is Layer.Arrow && arrowContains(layer, r, pos, OutlineSlopPx)) {
+                    layer
+                } else {
+                    null
+                }
+            }
+        }
+    }
+
+    // Which endpoint of the currently selected arrow is under a screen point.
+    val hitArrowEnd: (Offset) -> ArrowEnd? = { pos ->
+        val sel = vm.selectedArrow
+        val r = fitRect
+        if (sel == null || r == null) {
+            null
+        } else {
+            val start = arrowPoint(sel.start, r)
+            val end = arrowPoint(sel.end, r)
+            when {
+                (pos - start).getDistance() <= HandleSlopPx -> ArrowEnd.START
+                (pos - end).getDistance() <= HandleSlopPx -> ArrowEnd.END
+                else -> null
+            }
+        }
+    }
+
     Canvas(
         modifier = modifier
             .background(Color(0xFF1B1B1B))
@@ -131,6 +166,7 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
                         when (vm.tool) {
                             EditorTool.TEXT -> vm.handleTextTap(hitText(pos))
                             EditorTool.SHAPE -> vm.handleShapeTap(hitShape(pos))
+                            EditorTool.ARROW -> vm.handleArrowTap(hitArrow(pos))
                             else -> Unit
                         }
                     },
@@ -151,6 +187,12 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
                                 if (!started) vm.beginShapeCreation(vm.shapeKind, norm)
                             }
                             EditorTool.BLUR -> vm.beginBlurStroke(norm)
+                            EditorTool.ARROW -> {
+                                val end = hitArrowEnd(position)
+                                val arrow = if (end != null) vm.selectedArrow else hitArrow(position)
+                                val started = vm.beginArrowInteraction(arrow, end, norm)
+                                if (!started) vm.beginArrowCreation(norm)
+                            }
                         }
                     },
                     onDrag = { change, _ ->
@@ -165,6 +207,11 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
                                 vm.continueShapeDrag(norm)
                             }
                             EditorTool.BLUR -> vm.continueBlurStroke(norm)
+                            EditorTool.ARROW -> if (vm.draftArrowEnd != null) {
+                                vm.continueArrowCreation(norm)
+                            } else {
+                                vm.continueArrowDrag(norm)
+                            }
                         }
                         change.consume()
                     },
@@ -196,6 +243,7 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
         vm.layers.forEach { layer ->
             val selectedText = layer is Layer.Text && layer.id == vm.selectedTextId
             val selectedShape = layer is Layer.Shape && layer.id == vm.selectedShapeId
+            val selectedArrow = layer is Layer.Arrow && layer.id == vm.selectedArrowId
             drawLayer(
                 layer = layer,
                 rect = rect,
@@ -205,6 +253,7 @@ fun CanvasOverlay(vm: EditorViewModel, modifier: Modifier = Modifier) {
                 textMeasurer = textMeasurer,
                 isTextSelected = selectedText,
                 isShapeSelected = selectedShape,
+                isArrowSelected = selectedArrow,
                 blurredFor = { strength -> vm.previewBlurredBitmap(strength)?.asImageBitmap() },
             )
         }
@@ -221,6 +270,10 @@ private fun endAction(vm: EditorViewModel) {
             vm.endShapeCreation()
         }
         EditorTool.BLUR -> vm.endBlurStroke()
+        EditorTool.ARROW -> {
+            vm.endArrowDrag()
+            vm.endArrowCreation()
+        }
     }
 }
 
@@ -349,6 +402,7 @@ private fun DrawScope.drawLayer(
     textMeasurer: TextMeasurer,
     isTextSelected: Boolean,
     isShapeSelected: Boolean,
+    isArrowSelected: Boolean,
     blurredFor: (Int) -> ImageBitmap?,
 ) {
     when (layer) {
@@ -442,6 +496,36 @@ private fun DrawScope.drawLayer(
             }
         }
 
+        is Layer.Arrow -> {
+            val a = arrowPoint(layer.start, rect)
+            val b = arrowPoint(layer.end, rect)
+            val shaftPx = layer.strokeFraction * min(rect.width, rect.height)
+            val headLen = shaftPx * 4f * layer.headScale
+            val head = arrowHeadGeometry(a, b, headLen)
+            if (head != null) {
+                drawLine(
+                    color = Color(layer.color),
+                    start = a,
+                    end = head.shaftEnd,
+                    strokeWidth = shaftPx,
+                    cap = StrokeCap.Round,
+                )
+                val headPath = androidx.compose.ui.graphics.Path()
+                headPath.moveTo(head.tip.x, head.tip.y)
+                headPath.lineTo(head.left.x, head.left.y)
+                headPath.lineTo(head.right.x, head.right.y)
+                headPath.close()
+                drawPath(headPath, Color(layer.color))
+            }
+            if (isArrowSelected) {
+                drawSelectionBox(arrowBounds(a, b, headLen))
+                listOf(a, b).forEach { p ->
+                    drawCircle(SelectionColor, HandleDrawRadiusPx, p)
+                    drawCircle(Color.White, HandleDrawRadiusPx - 2.5f, p)
+                }
+            }
+        }
+
         is Layer.Cover -> {
             val x = rect.left + layer.left * rect.width
             val y = rect.top + layer.top * rect.height
@@ -476,5 +560,72 @@ private fun DrawScope.drawSelectionBox(b: Rect) {
         style = Stroke(width = 2f),
     )
 }
+
+/** Converts a normalized arrow point into a screen point inside [rect]. */
+private fun arrowPoint(norm: Offset, rect: Rect) = Offset(
+    rect.left + norm.x * rect.width,
+    rect.top + norm.y * rect.height,
+)
+
+/** Arrowhead geometry: shaft ends at the head base, triangle points at the tip. */
+private class ArrowHead(
+    val tip: Offset,
+    val left: Offset,
+    val right: Offset,
+    val shaftEnd: Offset,
+)
+
+/**
+ * Computes arrowhead points for a shaft [start]->[end]. Returns null for
+ * near-zero-length arrows so degenerate geometry is never drawn. The head is
+ * clamped to 80% of the shaft length so very short arrows still render cleanly.
+ */
+private fun arrowHeadGeometry(start: Offset, end: Offset, headLenRaw: Float): ArrowHead? {
+    val dx = end.x - start.x
+    val dy = end.y - start.y
+    val len = sqrt(dx * dx + dy * dy)
+    if (len < 0.01f) return null
+    val ux = dx / len
+    val uy = dy / len
+    val headLen = min(headLenRaw, len * 0.8f)
+    val shaftEnd = Offset(end.x - ux * headLen, end.y - uy * headLen)
+    val halfW = headLen * 0.5f
+    val left = Offset(shaftEnd.x - uy * halfW, shaftEnd.y + ux * halfW)
+    val right = Offset(shaftEnd.x + uy * halfW, shaftEnd.y - ux * halfW)
+    return ArrowHead(tip = end, left = left, right = right, shaftEnd = shaftEnd)
+}
+
+/** Screen bounds used for the selection box of a selected arrow. */
+private fun arrowBounds(a: Offset, b: Offset, headLen: Float): Rect {
+    val pad = max(headLen, 12f)
+    return Rect(
+        min(a.x, b.x) - pad,
+        min(a.y, b.y) - pad,
+        max(a.x, b.x) + pad,
+        max(a.y, b.y) + pad,
+    )
+}
+
+/** Whether a screen point is on the arrow shaft or inside the arrowhead. */
+private fun arrowContains(layer: Layer.Arrow, rect: Rect, pos: Offset, tol: Float): Boolean {
+    val a = arrowPoint(layer.start, rect)
+    val b = arrowPoint(layer.end, rect)
+    val shaftPx = layer.strokeFraction * min(rect.width, rect.height)
+    val head = arrowHeadGeometry(a, b, shaftPx * 4f * layer.headScale) ?: return false
+    return segDistance(pos, a, head.shaftEnd) <= tol ||
+        pointInTriangle(pos, head.tip, head.left, head.right)
+}
+
+private fun pointInTriangle(p: Offset, a: Offset, b: Offset, c: Offset): Boolean {
+    val d1 = triangleSign(p, a, b)
+    val d2 = triangleSign(p, b, c)
+    val d3 = triangleSign(p, c, a)
+    val hasNeg = d1 < 0 || d2 < 0 || d3 < 0
+    val hasPos = d1 > 0 || d2 > 0 || d3 > 0
+    return !(hasNeg && hasPos)
+}
+
+private fun triangleSign(p: Offset, a: Offset, b: Offset) =
+    (p.x - b.x) * (a.y - b.y) - (a.x - b.x) * (p.y - b.y)
 
 

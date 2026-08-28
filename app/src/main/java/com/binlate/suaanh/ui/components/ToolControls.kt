@@ -220,6 +220,59 @@ fun ToolControls(
             }
         }
 
+        EditorTool.ARROW -> {
+            val sel = state.selectedArrow
+            val curColor = sel?.let { Color(it.color) } ?: state.arrowColor
+            val curStroke = sel?.strokeFraction ?: state.arrowStrokeFraction
+            val curHead = sel?.headScale ?: state.arrowHeadScale
+
+            // Arrow color edits the selected arrow live
+            ColorControls(curColor, { color ->
+                state.previewArrowColor(color)
+                state.commitLayerPropertySession()
+            }, {
+                openColorPicker(
+                    ColorPickerRequest(
+                        initial = curColor,
+                        onLive = { state.previewArrowColor(it) },
+                        onApply = {
+                            state.previewArrowColor(it)
+                            state.commitLayerPropertySession()
+                        },
+                        onCancel = { state.cancelLayerPropertySession() },
+                    )
+                )
+            }, modifier)
+
+            // Shaft thickness edits the selected arrow live (one undo step per drag)
+            SizeControl(
+                "Độ dày thân mũi tên",
+                curStroke,
+                0.002f..0.03f,
+                onChange = { state.previewArrowStroke(it) },
+                onValueChangeFinished = { state.commitLayerPropertySession() },
+            )
+
+            // Arrowhead size (also scales proportionally with thickness)
+            NumberSlider(
+                "Kích thước đầu mũi tên",
+                curHead,
+                0.5f..3f,
+                onChange = { state.previewArrowHead(it) },
+                onValueChangeFinished = { state.commitLayerPropertySession() },
+            )
+
+            if (sel != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { state.deleteSelectedLayer() }) {
+                        Icon(Icons.Filled.Delete, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Xóa")
+                    }
+                }
+            }
+        }
+
         EditorTool.COVER -> {
             CoverModeSelector(state, modifier)
             if (state.coverMode == CoverMode.SOLID) {

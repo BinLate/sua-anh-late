@@ -29,6 +29,7 @@ object EditorRenderer {
                 is Layer.Cover -> drawCover(canvas, base, layer)
                 is Layer.Shape -> drawShape(canvas, layer, base.width, base.height, shorter.toFloat())
                 is Layer.BlurStroke -> drawBlurStroke(canvas, base, layer, shorter.toFloat())
+                is Layer.Arrow -> drawArrow(canvas, layer, base.width, base.height, shorter.toFloat())
             }
         }
         return out
@@ -154,5 +155,53 @@ object EditorRenderer {
         canvas.clipPath(fill)
         canvas.drawBitmap(blurred, 0f, 0f, null)
         canvas.restoreToCount(save)
+    }
+
+    /**
+     * Draws an arrow annotation. The arrowhead geometry mirrors the preview
+     * (CanvasOverlay.arrowHeadGeometry) so export matches on-screen rendering:
+     * the shaft stops at the head base and the head is clamped to 80% of the
+     * shaft length so very short arrows still render cleanly.
+     */
+    private fun drawArrow(
+        canvas: Canvas,
+        layer: Layer.Arrow,
+        w: Int,
+        h: Int,
+        shorter: Float,
+    ) {
+        val ax = layer.start.x * w
+        val ay = layer.start.y * h
+        val bx = layer.end.x * w
+        val by = layer.end.y * h
+        val dx = bx - ax
+        val dy = by - ay
+        val len = kotlin.math.sqrt(dx * dx + dy * dy)
+        if (len < 0.01f) return
+        val ux = dx / len
+        val uy = dy / len
+
+        val shaftPx = layer.strokeFraction * shorter
+        val headLen = minOf(shaftPx * 4f * layer.headScale, len * 0.8f)
+        val shaftEndX = bx - ux * headLen
+        val shaftEndY = by - uy * headLen
+
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = layer.color
+            style = Paint.Style.STROKE
+            strokeWidth = shaftPx
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        canvas.drawLine(ax, ay, shaftEndX, shaftEndY, paint)
+
+        val halfW = headLen * 0.5f
+        val head = Path().apply {
+            moveTo(bx, by)
+            lineTo(shaftEndX - uy * halfW, shaftEndY + ux * halfW)
+            lineTo(shaftEndX + uy * halfW, shaftEndY - ux * halfW)
+            close()
+        }
+        canvas.drawPath(head, paint.apply { style = Paint.Style.FILL })
     }
 }

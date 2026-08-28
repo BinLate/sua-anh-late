@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.binlate.suaanh.editor.model.ArrowEnd
 import com.binlate.suaanh.editor.model.CoverMode
 import com.binlate.suaanh.editor.model.EditorTool
 import com.binlate.suaanh.editor.model.Handle
@@ -83,6 +84,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     // ---------- blur settings ----------
     var blurBrushFraction by mutableStateOf(0.02f)    // brush radius, of shorter edge
     var blurStrength by mutableStateOf(5)             // 1..10, maps to a real blur radius
+
+    // ---------- arrow settings ----------
+    var arrowColor by mutableStateOf(Color(0xFFE53935))
+    var arrowStrokeFraction by mutableStateOf(0.006f) // shaft width, of shorter edge
+    var arrowHeadScale by mutableStateOf(1f)          // arrowhead size multiplier
 
     // Precomputed blurred preview bitmap for the current strength (background task).
     var blurStrengthBitmap by mutableStateOf<Bitmap?>(null)
@@ -154,6 +160,24 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     var draftBlur by mutableStateOf<Layer.BlurStroke?>(null)
         private set
     private var draftBlurPoints = mutableListOf<Offset>()
+
+    // ---------- arrow selection / editing ----------
+    var selectedArrowId by mutableStateOf<Long?>(null)
+        private set
+    private var movingArrowId: Long? = null
+    private var arrowMoveOriginal: Layer.Arrow? = null
+    private var arrowEndDrag: ArrowEnd? = null
+    private var draftArrow: Offset? = null       // normalized start while creating
+    var draftArrowEnd by mutableStateOf<Offset?>(null) // normalized live end while creating
+    private var nextArrowId = 1L
+    private var draftArrowId = 1L
+
+    /** The currently selected arrow layer, or null when none. */
+    val selectedArrow: Layer.Arrow?
+        get() = layers.lastOrNull { it is Layer.Arrow && it.id == selectedArrowId } as Layer.Arrow?
+
+    fun findArrow(id: Long): Layer.Arrow? =
+        layers.lastOrNull { it is Layer.Arrow && it.id == id } as Layer.Arrow?
 
     /** The currently selected text layer, or null when none. */
     val selectedText: Layer.Text?
@@ -228,6 +252,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         resizingHandle = null
         draftShape = null
         draftBlur = null
+        selectedArrowId = null
+        movingArrowId = null
+        arrowMoveOriginal = null
+        arrowEndDrag = null
+        draftArrow = null
+        draftArrowEnd = null
+        nextArrowId = 1L
         EditorProcessor.clearBlurCache()
         previewBlurCache.clear()
         previewBlurVersion++
@@ -438,7 +469,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     // ---- property editing of the selected layer (text or shape), with undo session ----
 
     private val selectedLayerId: Long?
-        get() = selectedTextId ?: selectedShapeId
+        get() = selectedTextId ?: selectedShapeId ?: selectedArrowId
 
     /** Open an undo session so a sequence of live edits commits as one history entry. */
     fun beginLayerPropertySession() {
@@ -497,10 +528,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /** Delete the currently selected text or shape layer (participates in undo/redo). */
+    /** Delete the currently selected text, shape, or arrow layer (participates in undo/redo). */
     fun deleteSelectedLayer() {
         val textId = selectedTextId
         val shapeId = selectedShapeId
+        val arrowId = selectedArrowId
         when {
             textId != null -> {
                 beginAction()
@@ -513,6 +545,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 beginAction()
                 layers = layers.filterNot { it is Layer.Shape && it.id == shapeId }
                 selectedShapeId = null
+                finalize(layers)
+            }
+            arrowId != null -> {
+                beginAction()
+                layers = layers.filterNot { it is Layer.Arrow && it.id == arrowId }
+                selectedArrowId = null
                 finalize(layers)
             }
         }
@@ -702,6 +740,145 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             baseBeforeAction = null
         }
         draftBlurPoints.clear()
+    }
+
+    // ---------------- arrows ----------------
+
+    /** Handle a tap: select an arrow or deselect when tapping empty space. */
+    fun handleArrowTap(tapped: Layer.Arrow?) {
+        selectedArrowId = tapped?.id
+    }
+
+    /**
+     * Begin a drag on an arrow. [end] != null means dragging a specific endpoint,
+     * otherwise ([tapped] != null) the whole arrow is moved.
+     */
+    fun beginArrowInteraction(tapped: Layer.Arrow?, end: ArrowEnd?, norm: Offset): Boolean {
+        if (tapped == null) {
+            selectedArrowId = null
+            return false
+        }
+        beginAction()
+        selectedArrowId = tapped.id
+        if (end != null) {
+            arrowEndDrag = end
+        } else {
+            movingArrowId = tapped.id
+            arrowMoveOriginal = tapped
+            dragStartOffset = norm
+        }
+        return true
+    }
+
+    fun continueArrowDrag(norm: Offset) {
+        val moved = arrowMoveOriginal
+        if (arrowEndDrag == null && moved != null) {
+            val id = movingArrowId ?: return
+            val dx = norm.x - dragStartOffset.x
+            val dy = norm.y - dragStartOffset.y
+            layers = layers.map {
+                if (it is Layer.Arrow && it.id == id) {
+                    it.copy(start = Offset(moved.start.x + dx, moved.start.y + dy),
+                            end = Offset(moved.end.x + dx, moved.end.y + dy))
+                } else {
+                    it
+                }
+            }
+            return
+        }
+        val id = movingArrowId ?: selectedArrowId ?: return
+        when (arrowEndDrag) {
+            ArrowEnd.START -> layers = layers.map {
+                if (it is Layer.Arrow && it.id == id) {
+                    it.copy(start = Offset(norm.x.coerceIn(0f, 1f), norm.y.coerceIn(0f, 1f)))
+                } else {
+                    it
+                }
+            }
+            ArrowEnd.END -> layers = layers.map {
+                if (it is Layer.Arrow && it.id == id) {
+                    it.copy(end = Offset(norm.x.coerceIn(0f, 1f), norm.y.coerceIn(0f, 1f)))
+                } else {
+                    it
+                }
+            }
+            null -> Unit
+        }
+    }
+
+    fun endArrowDrag() {
+        if (movingArrowId != null || arrowEndDrag != null) finalize(layers)
+        movingArrowId = null
+        arrowMoveOriginal = null
+        arrowEndDrag = null
+    }
+
+    /** Drag-create a new arrow from [norm] (start and end at the same point). */
+    fun beginArrowCreation(norm: Offset) {
+        beginAction()
+        draftArrow = norm
+        draftArrowEnd = norm
+        draftArrowId = nextArrowId++
+    }
+
+    fun continueArrowCreation(norm: Offset) {
+        draftArrowEnd = norm
+        val start = draftArrow ?: return
+        val end = norm
+        layers = baseBeforeAction.orEmpty() +
+            Layer.Arrow(
+                id = draftArrowId,
+                start = Offset(start.x.coerceIn(0f, 1f), start.y.coerceIn(0f, 1f)),
+                end = Offset(end.x.coerceIn(0f, 1f), end.y.coerceIn(0f, 1f)),
+                color = arrowColor.toArgb(),
+                strokeFraction = arrowStrokeFraction,
+                headScale = arrowHeadScale,
+            )
+    }
+
+    fun endArrowCreation() {
+        draftArrowEnd = null
+        val start = draftArrow ?: run { draftArrow = null; return }
+        draftArrow = null
+        val dx = layers.mapNotNull { (it as? Layer.Arrow)?.let { a -> a } }
+            .firstOrNull { it.id == draftArrowId }
+        if (dx != null && (start - dx.end).getDistance() > 0.001f) {
+            finalize(layers)
+            selectedArrowId = dx.id
+        } else {
+            layers = baseBeforeAction.orEmpty()
+            baseBeforeAction = null
+        }
+    }
+
+    /** Live-preview arrow color; edits the selected arrow in place. */
+    fun previewArrowColor(color: Color) {
+        beginLayerPropertySession()
+        arrowColor = color
+        val id = selectedArrowId ?: return
+        layers = layers.map {
+            if (it is Layer.Arrow && it.id == id) it.copy(color = color.toArgb()) else it
+        }
+    }
+
+    /** Live-preview arrow shaft width; edits the selected arrow in place. */
+    fun previewArrowStroke(fraction: Float) {
+        beginLayerPropertySession()
+        arrowStrokeFraction = fraction
+        val id = selectedArrowId ?: return
+        layers = layers.map {
+            if (it is Layer.Arrow && it.id == id) it.copy(strokeFraction = fraction) else it
+        }
+    }
+
+    /** Live-preview arrowhead size; edits the selected arrow in place. */
+    fun previewArrowHead(scale: Float) {
+        beginLayerPropertySession()
+        arrowHeadScale = scale
+        val id = selectedArrowId ?: return
+        layers = layers.map {
+            if (it is Layer.Arrow && it.id == id) it.copy(headScale = scale) else it
+        }
     }
 
     // ---------------- export ----------------
